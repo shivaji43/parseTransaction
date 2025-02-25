@@ -36,9 +36,10 @@ import {
           const decoded = AccountLayout.decode(accountInfo.data);
           const mint = decoded.mint.toString();
           const amount = Number(decoded.amount);
+          const owner = decoded.owner.toString(); 
           
-          preBalances.set(accountAddress, { mint, amount });
-          console.log(`Pre-simulation: Account ${accountAddress.substring(0, 6)}... holds ${amount} of token ${mint.substring(0, 6)}...`);
+          preBalances.set(accountAddress, { mint, amount, owner });
+          console.log(`Pre-simulation: Token Account ${accountAddress} with ${amount} of token ${mint} owned by wallet ${owner}`);
         }
       } catch (error : any) {
         console.log(`Error fetching account ${accountAddress}: ${error.message}`);
@@ -77,9 +78,10 @@ import {
             const decoded = AccountLayout.decode(data);
             const mint = decoded.mint.toString();
             const amount = Number(decoded.amount);
+            const owner = decoded.owner.toString(); // Extract the wallet address
             
-            postBalances.set(accountPubkey, { mint, amount });
-            console.log(`Post-simulation: Account ${accountPubkey.substring(0, 6)}... holds ${amount} of token ${mint.substring(0, 6)}...`);
+            postBalances.set(accountPubkey, { mint, amount, owner });
+            console.log(`Post-simulation: Token Account ${accountPubkey} with ${amount} of token ${mint} owned by wallet ${owner}`);
           }
         } catch (error : any) {
           console.log(`Error decoding account data: ${error.message}`);
@@ -87,29 +89,6 @@ import {
       }
     }
     
-    // Calculate and display changes
-    console.log('\n--- Token Balance Changes ---');
-    for (const [account, postData] of postBalances.entries()) {
-      const preData = preBalances.get(account);
-      
-      if (preData) {
-        const change = postData.amount - preData.amount;
-        if (change !== 0) {
-          const sign = change > 0 ? '+' : '';
-          console.log(`Account ${account.substring(0, 8)}... : ${sign}${change} of token ${postData.mint.substring(0, 8)}...`);
-        }
-      } else {
-        // New token account
-        console.log(`New token account ${account.substring(0, 8)}... : ${postData.amount} of token ${postData.mint.substring(0, 8)}...`);
-      }
-    }
-    
-    // Check for closed accounts
-    for (const [account, preData] of preBalances.entries()) {
-      if (!postBalances.has(account)) {
-        console.log(`Account ${account.substring(0, 8)}... closed (previously had ${preData.amount} of token ${preData.mint.substring(0, 8)}...)`);
-      }
-    }
     
     return {
       preBalances: Object.fromEntries(preBalances),
@@ -117,10 +96,10 @@ import {
       success: simulationResult.value.err === null
     };
   }
-
-(async () => {
-    const serializedTransaction = 'AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/AN+I4pFaQHDDGbTZeZe9ZuItKn2FHICkIUUmFHLUvuoPMwr8dVX1TIPBqqtBKovELfs0FnUvzRxoVoYzJOUHAgAIDim1s8qbSmB92mcD+LORkyMDF6lu/U9WJtxOkCn8fPxyqSfS21hJ+oTOehEXEYBeaNqsydDYjZqf1L/AldJw2uQxZyp5L3sCX7zdsAW9rnpRyBCLHI0vXFrgSBwRZLSrwm0cZ5LhNGqUuyoosHzgX4qKklM/mXZfbY5P3YFhXjGWft+3fJSORlmRgYAXTiZcs1qBcx55aF4mZdpJIjXCgz3KsxPL0i0kx3BFeEWSduJHsmNSBIqhASLhf5UVNsz7WAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwZGb+UhFzL/7K26csOb57yM5bvF9xJrLEObOkAAAAAFSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjQbd9uHXZaGT2cvhRs7reawctIXtX1s3kTqM9YV+/wCpM4q6xj0HkaERh2Zuqn+xa51t3JEl5PL8COT42q2vaDeMlyWPTiSJ8bs9ECkUjg2DC1oTmdr/EIQEjnvY2+n4WbwHxW5grT0/F3OC6sZUj7of0yz9kMoCs+fPoYX9znOY870t5h5iwpEaFSbn0ADhmHWooZImTFM6LC9B7H84XZglHPT6+uWMkrGDwq48j8Yk6fO7qdoAEHfe2IvUK43xzQUHAAUCQA0DAAcACQNAQg8AAAAAAAoKAQAFDA0CBAkLBhiK4+hN36Zgxa+ebN7S/RUDAJ7rERQAAAAIAQEsRGVwb3NpdCA2MWY3NzBjMC1kOWMwLTQwMDktYTA1My1mZmE4MGVhNzM3YmEGAgADDAIAAADIDD4AAAAAAA==';
+  
+  (async () => {
+    const serializedTransaction = 'AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAhLJcbdP1NVjJjlPn9ha63QzFkcC0oTFKwfW4FbOGcqQpWldXGM3PouCEzNDjLF0BFRt7X8KRqSqshy2iEth4LAgAIDim1s8qbSmB92mcD+LORkyMDF6lu/U9WJtxOkCn8fPxyqSfS21hJ+oTOehEXEYBeaNqsydDYjZqf1L/AldJw2uQ/YsBQ1bh6cpNvD2K/vQgIFjv5fS3YF3i+hwkO9SiXRW0cZ5LhNGqUuyoosHzgX4qKklM/mXZfbY5P3YFhXjGW4/sQewNuB49c0ItC0YuhAl7tWg5lLqRAUWJ1eTBUAbrorDARlJnx/94mezVZ6s5V56HXcSBjUrqqlmxC7OQwZwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwZGb+UhFzL/7K26csOb57yM5bvF9xJrLEObOkAAAAAFSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjQbd9uHXZaGT2cvhRs7reawctIXtX1s3kTqM9YV+/wCpM4q6xj0HkaERh2Zuqn+xa51t3JEl5PL8COT42q2vaDeMlyWPTiSJ8bs9ECkUjg2DC1oTmdr/EIQEjnvY2+n4Wcb6evO+2606PWXzaqvJdDGxu+TC0vbg5HymAgNFL11h870t5h5iwpEaFSbn0ADhmHWooZImTFM6LC9B7H84XZh+rfUD/HWv9ZtYg614vrD+ULGGEfOeQNYlW4/QZzr4TQUHAAUCQA0DAAcACQNAQg8AAAAAAAoKAQACDA0EBQkLBhiK4+hN36ZgxR+OGSQl4q0xONqqAAAAAAAIAQEsRGVwb3NpdCA2YzYzZWYzZS00ODU3LTQ0YjQtYTU4NC0wNDE5MDk4NGM4NzcGAgADDAIAAADVqTsAAAAAAA==';
     const connection = new Connection('https://greatest-polished-owl.solana-mainnet.quiknode.pro/f70604dd15c9c73615a9bd54d36060d0696935f3');
     
     await simulateTransactionWithBalanceChanges(serializedTransaction, connection);
-})();
+  })();
