@@ -12,6 +12,17 @@ import {
   TOKEN_PROGRAM_ID,
 } from '@solana/spl-token';
 
+// Define the interface for the transaction information output
+interface TokenAsset {
+  mint: string;
+  balanceChange: number;
+}
+
+interface TransactionInfo {
+  account: string; // This will hold the wallet public key (owner), not the token account
+  assets: TokenAsset;
+}
+
 async function simulateTransactionWithBalanceChanges(
   serializedTransaction: string,
   connection: Connection
@@ -92,8 +103,35 @@ async function simulateTransactionWithBalanceChanges(
     }
   }
   
+  // Create the transaction info array with the requested format
+  const transactionInfo: TransactionInfo[] = [];
+  
+  // Calculate and collect balance changes
+  for (const [address, preInfo] of preBalances.entries()) {
+    const postInfo = postBalances.get(address);
+    
+    if (postInfo) {
+      const balanceChange = postInfo.amount - preInfo.amount;
+      
+      // Only include accounts with balance changes
+      if (balanceChange !== 0) {
+        transactionInfo.push({
+          account: preInfo.owner, // Using the wallet public key (owner) instead of token account address
+          assets: {
+            mint: preInfo.mint,
+            balanceChange: balanceChange
+          }
+        });
+      }
+    }
+  }
+  
+  // Output the transaction info array
+  console.log('Transaction Info:');
+  console.log(JSON.stringify(transactionInfo, null, 2));
   
   return {
+    transactionInfo,
     preBalances: Object.fromEntries(preBalances),
     postBalances: Object.fromEntries(postBalances),
     success: simulationResult.value.err === null
@@ -114,8 +152,6 @@ async function simulateVersionedTransactionWithBalanceChanges(
   
   // Get accounts lookups if they exist
   let allAccountKeys = [...staticAccountKeys];
-  
-  // For lookup tables, we'd need to do additional handling here
 
   // Get unique accounts as strings for the RPC call
   const uniqueAccountsStr = [...new Set(allAccountKeys.map(acc => acc.toBase58()))];
@@ -206,7 +242,34 @@ async function simulateVersionedTransactionWithBalanceChanges(
     }
   });
   
-  // Step 4: Calculate balance changes
+  // Create the transaction info array with the requested format
+  const transactionInfo: TransactionInfo[] = [];
+  
+  // Calculate and collect token balance changes
+  for (const [address, preInfo] of preBalances.entries()) {
+    const postInfo = postBalances.get(address);
+    
+    if (postInfo) {
+      const balanceChange = postInfo.amount - preInfo.amount;
+      
+      // Only include accounts with balance changes
+      if (balanceChange !== 0) {
+        transactionInfo.push({
+          account: preInfo.owner, 
+          assets: {
+            mint: preInfo.mint,
+            balanceChange: balanceChange
+          }
+        });
+      }
+    }
+  }
+  
+  // Output the transaction info array
+  console.log('Transaction Info:');
+  console.log(JSON.stringify(transactionInfo, null, 2));
+  
+  // Step 4: Calculate detailed balance changes for return value
   const tokenBalanceChanges = {};
   for (const [address, preInfo] of preBalances.entries()) {
     const postInfo = postBalances.get(address);
@@ -235,6 +298,7 @@ async function simulateVersionedTransactionWithBalanceChanges(
   }
   
   return {
+    transactionInfo,
     tokenBalanceChanges,
     solBalanceChanges,
     logs: simulationResult.value.logs || [],
@@ -257,15 +321,25 @@ async function processTransaction(serializedTransaction: string, connection: Con
   }
 }
 
+// Example usage
 (async () => {
   
-  const versionedTransaction = 'AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQAGCkrBy2zikerA7ILoFMH8UB6HxHzDY1ZBNlR9WmTzLll+E3vr7fasJp48RVHENfWPNKvHu4jXqnkU6vNfHxmPJAk/iDlrRZYU6Q9b/gvaBYy+nunXgRwYNsnweqYVijYd0O1a8vq/qt0O2PxjjbpLWEDHRRCb+PIy7Yfm9TMiF/bLAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACsH4P9uc5VDeldVYzceVRhzPQ3SsaI7BOphAAiCnjaBgMGRm/lIRcy/+ytunLDm+e8jOW7xfcSayxDmzpAAAAAtD/6J/XX9kp0wJsfKVh53ksJqzbfyd1RSzIap7OM5egEedVb8jHAbu50xW7OaBUH/bGy3qP0jlECsc2iVrwTjwbd9uHXZaGT2cvhRs7reawctIXtX1s3kTqM9YV+/wCpKkg1oWF6R5Ux+kuQIpI5GczWksDPmzw8ulyvZk65ORQGBgAFAlqmAQAGAAkDRHoFAAAAAAAEAgACDAIAAAABTekFAAAAAAgFAgAOCQQJk/F7ZPSErnb9CBMJAAIBCA0DBwgPAAwLCgIBCRAFJOUXy5d6460qAQAAAD0AZAABES/KBQAAAAAR8coAAAAAACQABQkDAgAAAQkBXebA5bRGJSJ69exFtoMFfhkdbXv3/0Pj0l8x1dXoHawDum+4BMATuXA=';
+  const versionedTransaction = 'AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQAEBym1s8qbSmB92mcD+LORkyMDF6lu/U9WJtxOkCn8fPxyP2LAUNW4enKTbw9iv70ICBY7+X0t2Bd4vocJDvUol0XKsxPL0i0kx3BFeEWSduJHsmNSBIqhASLhf5UVNsz7WAMGRm/lIRcy/+ytunLDm+e8jOW7xfcSayxDmzpAAAAABHnVW/IxwG7udMVuzmgVB/2xst6j9I5RArHNola8E4+0P/on9df2SnTAmx8pWHneSwmrNt/J3VFLMhqns4zl6LwHxW5grT0/F3OC6sZUj7of0yz9kMoCs+fPoYX9znOYvY2GR1kcE0zSJhSFGWcIqiz5RkX6Hu4h+cIMW3utYB0DAwAFAgEYAQADAAkDQA0DAAAAAAAEFA0AAQIEBgQFBA4ICgcJCwECAA0MI+UXy5d6460qAQAAAENkAAGAlpgAAAAAAFe3XNoRAAAAMgAAAVg911Rv2rK7AtiVaz/9+HjwWjsNnkK5ZBu98+ea8/eSBTA0MUsyA00NMw==';
   
   const connection = new Connection('https://greatest-polished-owl.solana-mainnet.quiknode.pro/f70604dd15c9c73615a9bd54d36060d0696935f3');
   
   try {
     const result = await processTransaction(versionedTransaction, connection);
+    
+    // Display a summary of the transaction results
+    if (result && result.transactionInfo) {    
+      if (result.success) {
+        console.log('Transaction simulation succeeded');
+      } else {
+        console.log('Transaction simulation failed');
+      }
+    }
   } catch (error) {
-    console.error('Error processing transactions:', error);
+    console.error('Error processing transaction:', error);
   }
 })();
