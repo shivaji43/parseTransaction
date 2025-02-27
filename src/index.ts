@@ -3,7 +3,6 @@ import {
   Transaction,
   PublicKey,
   VersionedTransaction,
-  TransactionMessage,
   SimulateTransactionConfig
 } from '@solana/web3.js';
 import {
@@ -11,16 +10,36 @@ import {
   ACCOUNT_SIZE,
   TOKEN_PROGRAM_ID,
 } from '@solana/spl-token';
+import axios from 'axios';
 
-// Define the interface for the transaction information output
+// Updated interface for the token asset output
 interface TokenAsset {
   mint: string;
   balanceChange: number;
+  logouri: string;
+  decimals: number;
 }
 
 interface TransactionInfo {
   account: string; // This will hold the wallet public key (owner), not the token account
   assets: TokenAsset;
+}
+
+// Function to fetch token information from Jupiter API
+async function fetchTokenInfo(mintAddress: string): Promise<{ logouri: string, decimals: number }> {
+  try {
+    const response = await axios.get(`https://tokens.jup.ag/token/${mintAddress}`);
+    return {
+      logouri: response.data.logoURI || '',
+      decimals: response.data.decimals || 0
+    };
+  } catch (error) {
+    console.log(`Error fetching token info for ${mintAddress}:`, error);
+    return {
+      logouri: '',
+      decimals: 0
+    };
+  }
 }
 
 async function simulateTransactionWithBalanceChanges(
@@ -115,11 +134,16 @@ async function simulateTransactionWithBalanceChanges(
       
       // Only include accounts with balance changes
       if (balanceChange !== 0) {
+        // Fetch token info from Jupiter API
+        const tokenInfo = await fetchTokenInfo(preInfo.mint);
+        
         transactionInfo.push({
           account: preInfo.owner, // Using the wallet public key (owner) instead of token account address
           assets: {
             mint: preInfo.mint,
-            balanceChange: balanceChange
+            balanceChange: balanceChange,
+            logouri: tokenInfo.logouri,
+            decimals: tokenInfo.decimals
           }
         });
       }
@@ -254,11 +278,16 @@ async function simulateVersionedTransactionWithBalanceChanges(
       
       // Only include accounts with balance changes
       if (balanceChange !== 0) {
+        // Fetch token info from Jupiter API
+        const tokenInfo = await fetchTokenInfo(preInfo.mint);
+        
         transactionInfo.push({
           account: preInfo.owner, 
           assets: {
             mint: preInfo.mint,
-            balanceChange: balanceChange
+            balanceChange: balanceChange,
+            logouri: tokenInfo.logouri,
+            decimals: tokenInfo.decimals
           }
         });
       }
@@ -275,13 +304,23 @@ async function simulateVersionedTransactionWithBalanceChanges(
     const postInfo = postBalances.get(address);
     
     if (postInfo) {
+      // Fetch token info from Jupiter API if there's a balance change
+      const balanceChange = postInfo.amount - preInfo.amount;
+      let tokenInfo = { logouri: '', decimals: 0 };
+      
+      if (balanceChange !== 0) {
+        tokenInfo = await fetchTokenInfo(preInfo.mint);
+      }
+      
       //@ts-ignore
       tokenBalanceChanges[address] = {
         mint: preInfo.mint,
         preAmount: preInfo.amount,
         postAmount: postInfo.amount,
         change: postInfo.amount - preInfo.amount,
-        owner: preInfo.owner
+        owner: preInfo.owner,
+        logouri: tokenInfo.logouri,
+        decimals: tokenInfo.decimals
       };
     }
   }
@@ -324,7 +363,7 @@ async function processTransaction(serializedTransaction: string, connection: Con
 // Example usage
 (async () => {
   
-  const versionedTransaction = 'AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQAEBym1s8qbSmB92mcD+LORkyMDF6lu/U9WJtxOkCn8fPxyP2LAUNW4enKTbw9iv70ICBY7+X0t2Bd4vocJDvUol0XKsxPL0i0kx3BFeEWSduJHsmNSBIqhASLhf5UVNsz7WAMGRm/lIRcy/+ytunLDm+e8jOW7xfcSayxDmzpAAAAABHnVW/IxwG7udMVuzmgVB/2xst6j9I5RArHNola8E4+0P/on9df2SnTAmx8pWHneSwmrNt/J3VFLMhqns4zl6LwHxW5grT0/F3OC6sZUj7of0yz9kMoCs+fPoYX9znOYvY2GR1kcE0zSJhSFGWcIqiz5RkX6Hu4h+cIMW3utYB0DAwAFAgEYAQADAAkDQA0DAAAAAAAEFA0AAQIEBgQFBA4ICgcJCwECAA0MI+UXy5d6460qAQAAAENkAAGAlpgAAAAAAFe3XNoRAAAAMgAAAVg911Rv2rK7AtiVaz/9+HjwWjsNnkK5ZBu98+ea8/eSBTA0MUsyA00NMw==';
+  const versionedTransaction = 'AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQAFDim1s8qbSmB92mcD+LORkyMDF6lu/U9WJtxOkCn8fPxyNxBrinkyKcWM0yri8Ob6fbj2ETlWbB74B2SrzsZMN6A9t1pWG6qWtPmFmciR1xbrt4IW+b1nNcz2N5abYbCcsD9iwFDVuHpyk28PYr+9CAgWO/l9LdgXeL6HCQ71KJdFZ0EED+QHqrBQRqB+cbMfYZjXZcTe9r+CfdbguirL8P6FtfLgAwNx3ulhTypPGpaPBqL7YKIanqHyZUBzfZ92pcqzE8vSLSTHcEV4RZJ24keyY1IEiqEBIuF/lRU2zPtY442SSQwcoMhg0j1nITMllFzOB/lJpdC1NPImviWB9UDvr8LArPwq0+kT4lW5cxZc4aLaNGWm3qHL2wMSSVrwgQMGRm/lIRcy/+ytunLDm+e8jOW7xfcSayxDmzpAAAAABHnVW/IxwG7udMVuzmgVB/2xst6j9I5RArHNola8E49RPixdukLDvYMw2r2DTumX5VA1ifoAVfXgkOTnLswDErQ/+if11/ZKdMCbHylYed5LCas238ndUUsyGqezjOXovAfFbmCtPT8Xc4LqxlSPuh/TLP2QygKz58+hhf3Oc5jFqWANStTLVr7WONa/Ohja64tn4xB1g5TxvSi6C5uMxQMJAAUCIB8DAAkACQNvdQcAAAAAAAolFgsAAwIBBhkNCgoMChoLFRQTBAIWGxgLFw4EAQ8REhYFEAcICinBIJszQdacgQMCAAAAPQFkAAEaZAECQEtMAAAAAACtXqJ7CAAAADIAAAJOgLKSmCyUmuksqMclFoVdtmiFizz7/yF11zNd6VSAxgUjJCAeHQQOISJxXebA5bRGJSJ69exFtoMFfhkdbXv3/0Pj0l8x1dXoHawDum+4Arlw';
   
   const connection = new Connection('https://greatest-polished-owl.solana-mainnet.quiknode.pro/f70604dd15c9c73615a9bd54d36060d0696935f3');
   
