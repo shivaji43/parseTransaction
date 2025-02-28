@@ -26,6 +26,10 @@ async function simulateTransactionWithBalanceChanges(
   const transactionBuffer = Buffer.from(serializedTransaction, 'base64');
   const transaction = Transaction.from(transactionBuffer);
   
+  // Get the primary wallet address (first signer)
+  const primaryWallet = transaction.signatures[0].publicKey.toBase58();
+  console.log(`Primary wallet: ${primaryWallet}`);
+  
   // Get the accounts involved in the transaction
   const accounts = transaction.instructions.flatMap(ix => 
     ix.keys.map(key => key.pubkey)
@@ -33,12 +37,19 @@ async function simulateTransactionWithBalanceChanges(
   const uniqueAccounts = [...new Set(accounts.map(acc => acc.toBase58()))];
   console.log(`Transaction involves ${uniqueAccounts.length} unique accounts`);
   
-  // Get pre-simulation token balances 
+  // Get pre-simulation token balances and SOL balances
   const preBalances = new Map();
+  const preSolBalances = new Map();
+  
   for (const accountAddress of uniqueAccounts) {
     const pubkey = new PublicKey(accountAddress);
     try {
       const accountInfo = await connection.getAccountInfo(pubkey);
+      
+      // Store SOL balance for wallet accounts
+      if (accountInfo) {
+        preSolBalances.set(accountAddress, accountInfo.lamports);
+      }
       
       // Check if this is a token account
       if (accountInfo && accountInfo.owner.equals(TOKEN_PROGRAM_ID) && accountInfo.data.length === ACCOUNT_SIZE) {
@@ -48,7 +59,6 @@ async function simulateTransactionWithBalanceChanges(
         const owner = decoded.owner.toString(); 
         
         preBalances.set(accountAddress, { mint, amount, owner });
-        console.log(`Pre-simulation: Token Account ${accountAddress} with ${amount} of token ${mint} owned by wallet ${owner}`);
       }
     } catch (error : any) {
       console.log(`Error fetching account ${accountAddress}: ${error.message}`);
@@ -61,9 +71,19 @@ async function simulateTransactionWithBalanceChanges(
   
   if (!simulationResult.value.accounts) {
     console.log('Simulation did not return account information');
-    return;
+    return {
+      walletBalanceChange: {
+        wallet: primaryWallet,
+        buying: [],
+        selling: [],
+        solChange: 0
+      },
+      success: false
+    };
   }
+  
   const postBalances = new Map();
+  const postSolBalances = new Map();
   
   // Extract token balances from simulation results
   for (let i = 0; i < simulationResult.value.accounts.length; i++) {
@@ -74,20 +94,22 @@ async function simulateTransactionWithBalanceChanges(
     // Extract the account address from the transaction
     const accountPubkey = uniqueAccounts[i];
     
+    // Store SOL balance for all accounts
+    if (account.lamports !== undefined) {
+      postSolBalances.set(accountPubkey, account.lamports);
+    }
+    
     // Check if it's a token account
     if (account.owner === TOKEN_PROGRAM_ID.toBase58()) {
       try {
         const data = Buffer.from(account.data[0], 'base64');
-        
-        // Verify it's actually a token account by checking size
         if (data.length === ACCOUNT_SIZE) {
           const decoded = AccountLayout.decode(data);
           const mint = decoded.mint.toString();
           const amount = Number(decoded.amount);
-          const owner = decoded.owner.toString(); // Extract the wallet address
+          const owner = decoded.owner.toString(); 
           
           postBalances.set(accountPubkey, { mint, amount, owner });
-          console.log(`Post-simulation: Token Account ${accountPubkey} with ${amount} of token ${mint} owned by wallet ${owner}`);
         }
       } catch (error : any) {
         console.log(`Error decoding account data: ${error.message}`);
@@ -95,10 +117,19 @@ async function simulateTransactionWithBalanceChanges(
     }
   }
   
-  // Create the transaction info array with the requested format
-  const transactionInfo: TransactionInfo[] = [];
+  // Calculate SOL change for the primary wallet
+  let solChange = 0;
+  const preSol = preSolBalances.get(primaryWallet) || 0;
+  const postSol = postSolBalances.get(primaryWallet) || 0;
+  solChange = postSol - preSol;
   
-  // Calculate and collect balance changes
+  // Create the wallet balance change structure
+  const buying: TokenAsset[] = [];
+  const selling: TokenAsset[] = [];
+  
+  // Process token balance changes by wallet
+  const walletChanges = new Map<string, Map<string, number>>();
+  
   for (const [address, preInfo] of preBalances.entries()) {
     const postInfo = postBalances.get(address);
     
@@ -107,36 +138,58 @@ async function simulateTransactionWithBalanceChanges(
       
       // Only include accounts with balance changes
       if (balanceChange !== 0) {
-        // Fetch token info from Jupiter API
-        const tokenInfo = await fetchTokenInfo(preInfo.mint);
+        // Group changes by wallet and token mint
+        if (!walletChanges.has(preInfo.owner)) {
+          walletChanges.set(preInfo.owner, new Map<string, number>());
+        }
         
-        transactionInfo.push({
-          account: preInfo.owner, // Using the wallet public key (owner) instead of token account address
-          assets: {
-            mint: preInfo.mint,
-            balanceChange: balanceChange,
-            amount: postInfo.amount,
-            logouri: tokenInfo.logouri,
-            decimals: tokenInfo.decimals
-          }
-        });
+        const walletTokenChanges = walletChanges.get(preInfo.owner)!;
+        const currentChange = walletTokenChanges.get(preInfo.mint) || 0;
+        walletTokenChanges.set(preInfo.mint, currentChange + balanceChange);
       }
     }
   }
   
-  // Output the transaction info array
-  console.log('Transaction Info:');
-  console.log(JSON.stringify(transactionInfo, null, 2));
+  // Process wallet token changes for the primary wallet
+  const primaryWalletChanges = walletChanges.get(primaryWallet);
+  if (primaryWalletChanges) {
+    for (const [mint, balanceChange] of primaryWalletChanges.entries()) {
+      // Fetch complete token info
+      const tokenInfo = await fetchTokenInfo(mint);
+      
+      // Create the token asset object
+      const tokenAsset: TokenAsset = {
+        mint,
+        balanceChange,
+        amount: balanceChange / Math.pow(10, tokenInfo.decimals), // Convert to decimal amount
+        logouri: tokenInfo.logouri,
+        decimals: tokenInfo.decimals,
+        symbol: tokenInfo.symbol,
+        name: tokenInfo.name
+      };
+      
+      // Sort into buying or selling based on balance change
+      if (balanceChange > 0) {
+        buying.push(tokenAsset);
+      } else {
+        selling.push(tokenAsset);
+      }
+    }
+  }
   
-  return {
-    transactionInfo,
-    preBalances: Object.fromEntries(preBalances),
-    postBalances: Object.fromEntries(postBalances),
+  // Create the final output
+  const output = {
+    walletBalanceChange: {
+      wallet: primaryWallet,
+      buying,
+      selling
+    },
     success: simulationResult.value.err === null
   };
+  
+  return output;
 }
 
-// Main function to determine transaction type and route accordingly
 async function processTransaction(serializedTransaction: string, connection: Connection) {
   // Check first two characters to determine transaction type
   if (serializedTransaction.startsWith('AQ')) {
@@ -151,10 +204,9 @@ async function processTransaction(serializedTransaction: string, connection: Con
   }
 }
 
-// Example usage
 (async () => {
   
-  const versionedTransaction = 'AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQAIDym1s8qbSmB92mcD+LORkyMDF6lu/U9WJtxOkCn8fPxyP2LAUNW4enKTbw9iv70ICBY7+X0t2Bd4vocJDvUol0VMr9my9KM7fPrQ2sSAQsgz5lHXoh4gfhd4+/UW1KzAU4x0z9lvPICnZqi8nzRoWjCadBBjBEvIdyfVoeaJ12940Jma9ayQ7XJTeurqTvUEjByOL3+y007FpedI9bvzt4vt8bb6Ife3mBYa2q+/aRIB668TE/bopd4zp4RSn/mvPgR4MSYHL0KpzWat0Y0bh7sxC/WDC8z1X2ot8XwBHNQMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUDAnDiGwcaoRPMpMbzwSqwxeFGbHA/lPU/ypxDrTePKwfg/25zlUN6V1VjNx5VGHM9DdKxojsE6mEACIKeNoGAwZGb+UhFzL/7K26csOb57yM5bvF9xJrLEObOkAAAAC0P/on9df2SnTAmx8pWHneSwmrNt/J3VFLMhqns4zl6Mb6evO+2606PWXzaqvJdDGxu+TC0vbg5HymAgNFL11hBHnVW/IxwG7udMVuzmgVB/2xst6j9I5RArHNola8E48G3fbh12Whk9nL4UbO63msHLSF7V9bN5E6jPWFfv8Aqb8e7cQBFqNisHD/AFmQHk6/TU5HxQRAg6vx9zxNAyiHBgoABQJQtwMACgAJA5isHQAAAAAABwIAAwwCAAAAKDC3BAAAAAANBQMAIA4HCZPxe2T0hK52/g0oDggAAwUGASAMAg0LDRwIBQQVERAPGh8XHg4dCAQGEhMUFhkbGB4OCSjBIJszQdacgQECAAAAOWQAAThkAQI4EpgEAAAAAAmHqwAAAAAAZAAFDgMDAAABCQJZfTkrqqg0GkW+iGFAaIHEbhkRX4YCBLoWvHI1OH2T2gcACgimTlIFCQMNFAkMAhEHAbjM8yG4Wc/tKkL50v8p4lRCpMnJvnfMN3B0Vb4rQoKUARkBCA==';
+  const versionedTransaction = 'AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQAIESm1s8qbSmB92mcD+LORkyMDF6lu/U9WJtxOkCn8fPxyH9RsYXp41YrTtfB/VqrENVYdGHG6rtaCOqWfAPswrbgqjJH2c3PWbYP4ZERy7T39e0Y5hPD1/bnjK+uXd6S2HD9iwFDVuHpyk28PYr+9CAgWO/l9LdgXeL6HCQ71KJdFh7Uj+ncbLnnXrncZ0M9fcpfQPh1Y9fJm+wF6ZvdeXAeMdM/ZbzyAp2aovJ80aFowmnQQYwRLyHcn1aHmiddveMrZu13tHOyiYVnph34vGYcaku4iU7ekVIo3h0M+6x0xyQ+0ezK8pEPmQbXwZ8Tz3O52/YACoT20v0iE4A7D1bT0leik9jkv1362dohmM3IIlfyxQveyd3cvj/bIXjnAqwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgpflRP9EQGoTt/pkws/6PsbhXfiTXgDHQXDervAT832sH4P9uc5VDeldVYzceVRhzPQ3SsaI7BOphAAiCnjaBgMGRm/lIRcy/+ytunLDm+e8jOW7xfcSayxDmzpAAAAAtD/6J/XX9kp0wJsfKVh53ksJqzbfyd1RSzIap7OM5ejG+nrzvtutOj1l82qryXQxsbvkwtL24OR8pgIDRS9dYQR51VvyMcBu7nTFbs5oFQf9sbLeo/SOUQKxzaJWvBOPBt324ddloZPZy+FGzut5rBy0he1fWzeROoz1hX7/AKkCizlUDtHB45MIFlJC6P6ZWVb+YLsYS/aSDOtjAQnFiQUMAAUCRusDAAwACQMpIwYAAAAAAA8FBQAdEAkJk/F7ZPSErnb+DyoQCgADBwQFDh0BDw0PIQoHCBkYFxofIB4iEBwKGxMIBBEVFhACEhQGDwsowSCbM0HWnIEGAgAAADhkAAEaZAECIspVAAAAAADNSkwCAAAAACEABRADBQAAAQkCPcIWqSTMYmINWP0vW0Tlq4135XWQhXMjBP7J23hZJIQGKykXJhYYAyUqGrjM8yG4Wc/tKkL50v8p4lRCpMnJvnfMN3B0Vb4rQoKUBBYbFxkFHRqZGBw=';
   
   const connection = new Connection('https://greatest-polished-owl.solana-mainnet.quiknode.pro/f70604dd15c9c73615a9bd54d36060d0696935f3');
   

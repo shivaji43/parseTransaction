@@ -25,7 +25,7 @@ export interface WalletBalanceChange {
     wallet: string;
     buying: TokenAsset[];
     selling: TokenAsset[];
-    solChange: number; // Keeping for backward compatibility but will be set to 0
+    solChange?: number; // Keeping for backward compatibility but will be set to 0
 }
   
   // Cache for token info to reduce API calls
