@@ -24,8 +24,7 @@ export interface TokenAsset {
 export interface WalletBalanceChange {
     wallet: string;
     buying: TokenAsset[];
-    selling: TokenAsset[];
-    solChange?: number; // Keeping for backward compatibility but will be set to 0
+    selling: TokenAsset[]; // Keeping for backward compatibility but will be set to 0
 }
   
   // Cache for token info to reduce API calls
@@ -308,8 +307,7 @@ export async function simulateVersionedTransactionWithBalanceChanges(
   const walletBalanceChange: WalletBalanceChange = {
     wallet: targetWallet,
     buying,
-    selling,
-    solChange: 0 // Setting to 0 since we're now including SOL in the token lists
+    selling // Setting to 0 since we're now including SOL in the token lists
   };
   
   return {
